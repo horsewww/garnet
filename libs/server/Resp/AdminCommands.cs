@@ -272,12 +272,10 @@ namespace Garnet.server
                         }
                     }
 
-                    foreach (var respCommandsInfo in RespCommandsInfo.getAllCommandsInfo().Take(3))
+                    foreach (var respCommandsInfo in RespCommandsInfo.GetAllCommandsInfo().Where(c => c.command == RespCommand.GET || c.command == RespCommand.CONFIG))
                     {
                         commandCount++;
-
-                        resultSb.Append(
-                            $"*6\r\n${respCommandsInfo.nameStr.Length}\r\n{respCommandsInfo.nameStr}\r\n:{respCommandsInfo.arity}\r\n*{respCommandsInfo.flagStrings.Length}\r\n{string.Join("\r\n", respCommandsInfo.flagStrings.Select(fs => $"+{fs}"))}\r\n:1\r\n:1\r\n:1\r\n");
+                        resultSb.Append(respCommandsInfo.respFormatCommandInfo);
                     }
 
                     while (!RespWriteUtils.WriteDirect(Encoding.ASCII.GetBytes($"*{commandCount}\r\n"), ref dcurr, dend))

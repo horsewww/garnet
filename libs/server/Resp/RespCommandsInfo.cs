@@ -3,8 +3,9 @@
 
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Linq;
+using System.Text;
+using Garnet.common;
 
 namespace Garnet.server
 {
@@ -32,40 +33,42 @@ namespace Garnet.server
         public readonly RespCommand command;
         public readonly HashSet<RespCommandOption> options;
         public readonly RespCommandFlags flags;
-        public readonly string[] flagStrings;
+        public readonly int firstKey;
+        public readonly int lastKey;
+        public readonly int step;
+        public readonly RespAclCategories aclCats;
+        public readonly RespCommandsInfo[] subcommands;
+        public readonly string respFormatCommandInfo;
 
-        private static readonly Lazy<IReadOnlyDictionary<string, string>> lazyFlagNameToDesc =
-            new(
-                () =>
-                {
-                    var flagToDesc = new Dictionary<string, string>();
-                    foreach (var flagFieldInfo in typeof(RespCommandFlags).GetFields())
-                    {
-                        var descAttr = (DescriptionAttribute)flagFieldInfo.GetCustomAttributes(typeof(DescriptionAttribute), false).FirstOrDefault();
-                        if (descAttr != null)
-                        {
-                            flagToDesc.Add(flagFieldInfo.Name, descAttr.Description);
-                        }
-                    }
+        private readonly string[] strFlags;
+        private readonly string[] strAclCats;
 
-                    return flagToDesc;
-                });
+        private static readonly Lazy<IDictionary<string, string>> LazyFlagNameToDesc = new(EnumUtils.GetEnumNameToDescription<RespCommandFlags>);
+        private static readonly Lazy<IDictionary<string, string>> LazyAclCatNameToDesc = new(EnumUtils.GetEnumNameToDescription<RespAclCategories>);
 
-        public RespCommandsInfo(string name, RespCommand command, int arity, HashSet<RespCommandOption> options, RespCommandFlags flags = RespCommandFlags.None)
+        public RespCommandsInfo(string name, RespCommand command, int arity, HashSet<RespCommandOption> options, RespCommandFlags flags = RespCommandFlags.None, int firstKey = 1, int lastKey = 1, int step = 1, RespAclCategories aclCats = RespAclCategories.None, RespCommandsInfo[] subcommands = null)
         {
             nameStr = name.ToUpper();
-            this.name = System.Text.Encoding.ASCII.GetBytes(nameStr);
+            this.name = Encoding.ASCII.GetBytes(nameStr);
             this.command = command;
             this.arity = arity;
             this.options = options;
             this.arrayCommand = 255;
             this.flags = flags;
-            this.flagStrings = flags == RespCommandFlags.None
-                ? Array.Empty<string>()
-                : flags.ToString().Split(',').Select(f => lazyFlagNameToDesc.Value[f.Trim()]).ToArray();
+            this.firstKey = firstKey;
+            this.lastKey = lastKey;
+            this.step = step;
+            this.aclCats = aclCats;
+            this.subcommands = subcommands ?? Array.Empty<RespCommandsInfo>();
+
+            string[] GetFlagsDesc(Enum fVal, IDictionary<string, string> nameToDesc) => fVal.ToString().Split(',').Select(f => nameToDesc[f.Trim()]).ToArray();
+            this.strFlags = flags == RespCommandFlags.None ? Array.Empty<string>() : GetFlagsDesc(flags, LazyFlagNameToDesc.Value);
+            this.strAclCats = aclCats == RespAclCategories.None ? Array.Empty<string>() : GetFlagsDesc(aclCats, LazyAclCatNameToDesc.Value);
+
+            this.respFormatCommandInfo = GetRespFormatCommandInfo();
         }
 
-        public RespCommandsInfo(string name, RespCommand command, int arity, HashSet<RespCommandOption> options, byte arrayCommand, RespCommandFlags flags = RespCommandFlags.None) : this(name, command, arity, options, flags)
+        public RespCommandsInfo(string name, RespCommand command, int arity, HashSet<RespCommandOption> options, byte arrayCommand, RespCommandFlags flags = RespCommandFlags.None, int firstKey = 1, int lastKey = 1, int step = 1, RespAclCategories aclCats = RespAclCategories.None, RespCommandsInfo[] subcommands = null) : this(name, command, arity, options, flags, firstKey, lastKey, step, aclCats, subcommands)
         {
             this.arrayCommand = arrayCommand;
         }
@@ -85,7 +88,7 @@ namespace Garnet.server
             return false;
         }
 
-        public static RespCommandsInfo findCommand(RespCommand cmd, byte subCmd = 0)
+        public static RespCommandsInfo FindCommand(RespCommand cmd, byte subCmd = 0)
         {
 
             RespCommandsInfo result = cmd switch
@@ -100,7 +103,7 @@ namespace Garnet.server
             return result;
         }
 
-        public static IEnumerable<RespCommandsInfo> getAllCommandsInfo()
+        public static IEnumerable<RespCommandsInfo> GetAllCommandsInfo()
         {
             foreach (var value in basicCommandsInfoMap.Values) yield return value;
             foreach (var value in customCommandsInfoMap.Values) yield return value;
@@ -110,78 +113,99 @@ namespace Garnet.server
             foreach (var value in sortedSetCommandsInfoMap.Values) yield return value;
         }
 
-        private static readonly Dictionary<RespCommand, RespCommandsInfo> basicCommandsInfoMap = new Dictionary<RespCommand, RespCommandsInfo>
+        private static readonly Dictionary<byte, RespCommandsInfo> configCommandsInfoMap = new()
         {
-            {RespCommand.GET,         new RespCommandsInfo("GET",        RespCommand.GET,         1, null, RespCommandFlags.ReadOnly | RespCommandFlags.Fast)},
-            {RespCommand.SET,         new RespCommandsInfo("SET",        RespCommand.SET,        -2, new HashSet<RespCommandOption>{
-                RespCommandOption.EX,
-                RespCommandOption.NX,
-                RespCommandOption.XX,
-                RespCommandOption.GET,
-                RespCommandOption.PX,
-                RespCommandOption.EXAT,
-                RespCommandOption.PXAT,
-            })},
-            {RespCommand.GETRANGE,    new RespCommandsInfo("GETRANGE",   RespCommand.GETRANGE,    3, null)},
-            {RespCommand.SETRANGE,    new RespCommandsInfo("SETRANGE",   RespCommand.SETRANGE,    3, null)},
-            // PUBLISH
-            {RespCommand.PFADD,       new RespCommandsInfo("PFADD",      RespCommand.PFADD,      -2, null)},
-            {RespCommand.PFCOUNT,     new RespCommandsInfo("PFCOUNT",    RespCommand.PFCOUNT,    -1, null)},
-            {RespCommand.PFMERGE,     new RespCommandsInfo("PFMERGE",    RespCommand.PFMERGE,    -2, null)},
-
-            {RespCommand.SETEX,       new RespCommandsInfo("SETEX",      RespCommand.SETEX,      -3, null)},
-            {RespCommand.PSETEX,      new RespCommandsInfo("PSETEX",     RespCommand.PSETEX,      3, null)},
-            {RespCommand.SETEXNX,     new RespCommandsInfo("SETEXNX",    RespCommand.SETEXNX,    -2, null)},
-            {RespCommand.SETEXXX,     new RespCommandsInfo("SETEXXX",    RespCommand.SETEXXX,    -2, null)},
-            {RespCommand.DEL,         new RespCommandsInfo("DEL",        RespCommand.DEL,        -1, null)},
-            {RespCommand.EXISTS,      new RespCommandsInfo("EXISTS",     RespCommand.EXISTS,      1, null)},
-            {RespCommand.RENAME,      new RespCommandsInfo("RENAME",     RespCommand.RENAME,      2, null)},
-            {RespCommand.INCR,        new RespCommandsInfo("INCR",       RespCommand.INCR,        1, null)},
-            {RespCommand.INCRBY,      new RespCommandsInfo("INCRBY",     RespCommand.INCRBY,      2, null)},
-            {RespCommand.DECR,        new RespCommandsInfo("DECR",       RespCommand.DECR,        1, null)},
-            {RespCommand.DECRBY,      new RespCommandsInfo("DECRBY",     RespCommand.DECRBY,      2, null)},
-            {RespCommand.EXPIRE,      new RespCommandsInfo("EXPIRE",     RespCommand.EXPIRE,     -2, new HashSet<RespCommandOption>{
-                RespCommandOption.NX,
-                RespCommandOption.XX,
-                RespCommandOption.GT,
-                RespCommandOption.LT,
-            })},
-            {RespCommand.PEXPIRE,     new RespCommandsInfo("PEXPIRE",    RespCommand.PEXPIRE,    -2, new HashSet<RespCommandOption>{
-                RespCommandOption.NX,
-                RespCommandOption.XX,
-                RespCommandOption.GT,
-                RespCommandOption.LT,
-            })},
-            {RespCommand.PERSIST,     new RespCommandsInfo("PERSIST",    RespCommand.PERSIST,     1, null)},
-            {RespCommand.TTL,         new RespCommandsInfo("TTL",        RespCommand.TTL,         1, null)},
-            {RespCommand.PTTL,        new RespCommandsInfo("PTTL",       RespCommand.PTTL,        1, null)},
-            {RespCommand.SETBIT,      new RespCommandsInfo("SETBIT",     RespCommand.SETBIT,      3, null)},
-            {RespCommand.GETBIT,      new RespCommandsInfo("GETBIT",     RespCommand.GETBIT,      2, null)},
-            {RespCommand.BITCOUNT,    new RespCommandsInfo("BITCOUNT",   RespCommand.BITCOUNT,   -1, null)},
-            {RespCommand.BITPOS,      new RespCommandsInfo("BITPOS",     RespCommand.BITPOS,     -2, null)},
-            {RespCommand.BITFIELD,    new RespCommandsInfo("BITFIELD",   RespCommand.BITFIELD,   -1, null)},
-
-            {RespCommand.MSET,        new RespCommandsInfo("MSET",       RespCommand.MSET,       -2, null)},
-            {RespCommand.MSETNX,      new RespCommandsInfo("MSETNX",     RespCommand.MSETNX,     -2, null)},
-            {RespCommand.MGET,        new RespCommandsInfo("MGET",       RespCommand.MGET,       -2, null)},
-            {RespCommand.UNLINK,      new RespCommandsInfo("UNLINK",     RespCommand.UNLINK,     -1, null)},
-
-            {RespCommand.MULTI,       new RespCommandsInfo("MULTI",      RespCommand.MULTI,       0,  null)},
-            {RespCommand.EXEC,        new RespCommandsInfo("EXEC",       RespCommand.EXEC,        0,  null)},
-            {RespCommand.WATCH,       new RespCommandsInfo("WATCH",      RespCommand.WATCH,      -1, null)},
-            {RespCommand.UNWATCH,     new RespCommandsInfo("WATCH",      RespCommand.UNWATCH,     0, null)},
-            {RespCommand.DISCARD,     new RespCommandsInfo("DISCARD",    RespCommand.DISCARD,     0,  null)},
-            {RespCommand.GETDEL,      new RespCommandsInfo("GETDEL",     RespCommand.GETDEL,      1, null)},
-            {RespCommand.APPEND,      new RespCommandsInfo("APPEND",     RespCommand.APPEND,      2,  null)},
-
-            //Admin Commands
-            {RespCommand.ECHO,        new RespCommandsInfo("ECHO",       RespCommand.ECHO,        1, null)},
-            {RespCommand.REPLICAOF,   new RespCommandsInfo("REPLICAOF",  RespCommand.REPLICAOF,   2, null)},
-            {RespCommand.SECONDARYOF, new RespCommandsInfo("SLAVEOF",    RespCommand.SECONDARYOF, 2, null)},
-            {RespCommand.CONFIG,      new RespCommandsInfo("CONFIG",     RespCommand.CONFIG,      1, null)},
-            {RespCommand.CLIENT,      new RespCommandsInfo("CLIENT",     RespCommand.CLIENT,      3, null)},
-            {RespCommand.REGISTERCS,  new RespCommandsInfo("REGISTERCS", RespCommand.REGISTERCS, -4, null)},
+            { (byte)ConfigSubCommands.GET, new RespCommandsInfo("CONFIG|GET", RespCommand.CONFIG, -2, null, (byte)ConfigSubCommands.GET,
+                RespCommandFlags.Admin | RespCommandFlags.NoScript | RespCommandFlags.Loading | RespCommandFlags.Stale, 0, 0, 0,
+                RespAclCategories.Admin | RespAclCategories.Slow | RespAclCategories.Dangerous) },
+            { (byte)ConfigSubCommands.REWRITE, new RespCommandsInfo("CONFIG|REWRITE", RespCommand.CONFIG, 1, null, (byte)ConfigSubCommands.REWRITE,
+                RespCommandFlags.Admin | RespCommandFlags.NoScript | RespCommandFlags.Loading | RespCommandFlags.Stale, 0, 0, 0,
+                RespAclCategories.Admin | RespAclCategories.Slow | RespAclCategories.Dangerous) },
+            { (byte)ConfigSubCommands.SET, new RespCommandsInfo("CONFIG|SET", RespCommand.CONFIG, -3, null, (byte)ConfigSubCommands.SET,
+                RespCommandFlags.Admin | RespCommandFlags.NoScript | RespCommandFlags.Loading | RespCommandFlags.Stale, 0, 0, 0,
+                RespAclCategories.Admin | RespAclCategories.Slow | RespAclCategories.Dangerous) },
         };
+
+        private static readonly Dictionary<RespCommand, RespCommandsInfo> basicCommandsInfoMap =
+            new()
+            {
+                {
+                    RespCommand.GET,    new RespCommandsInfo("GET", RespCommand.GET, 1, null, RespCommandFlags.ReadOnly | RespCommandFlags.Fast, 1, 1, 1, 
+                        RespAclCategories.Read | RespAclCategories.String | RespAclCategories.Fast)
+                },
+                {
+                    RespCommand.SET,    new RespCommandsInfo("SET", RespCommand.SET, -2, new HashSet<RespCommandOption>
+                    {
+                        RespCommandOption.EX,
+                        RespCommandOption.NX,
+                        RespCommandOption.XX,
+                        RespCommandOption.GET,
+                        RespCommandOption.PX,
+                        RespCommandOption.EXAT,
+                        RespCommandOption.PXAT,
+                    }, RespCommandFlags.Write | RespCommandFlags.DenyOom, 1, 1, 1, RespAclCategories.Write | RespAclCategories.String | RespAclCategories.Slow)
+                },
+                {RespCommand.GETRANGE,    new RespCommandsInfo("GETRANGE",   RespCommand.GETRANGE,    3, null)},
+                        {RespCommand.SETRANGE,    new RespCommandsInfo("SETRANGE",   RespCommand.SETRANGE,    3, null)},
+                // PUBLISH
+                {RespCommand.PFADD,       new RespCommandsInfo("PFADD",      RespCommand.PFADD,      -2, null)},
+                {RespCommand.PFCOUNT,     new RespCommandsInfo("PFCOUNT",    RespCommand.PFCOUNT,    -1, null)},
+                {RespCommand.PFMERGE,     new RespCommandsInfo("PFMERGE",    RespCommand.PFMERGE,    -2, null)},
+
+                {RespCommand.SETEX,       new RespCommandsInfo("SETEX",      RespCommand.SETEX,      -3, null)},
+                {RespCommand.PSETEX,      new RespCommandsInfo("PSETEX",     RespCommand.PSETEX,      3, null)},
+                {RespCommand.SETEXNX,     new RespCommandsInfo("SETEXNX",    RespCommand.SETEXNX,    -2, null)},
+                {RespCommand.SETEXXX,     new RespCommandsInfo("SETEXXX",    RespCommand.SETEXXX,    -2, null)},
+                {RespCommand.DEL,         new RespCommandsInfo("DEL",        RespCommand.DEL,        -1, null)},
+                {RespCommand.EXISTS,      new RespCommandsInfo("EXISTS",     RespCommand.EXISTS,      1, null)},
+                {RespCommand.RENAME,      new RespCommandsInfo("RENAME",     RespCommand.RENAME,      2, null)},
+                {RespCommand.INCR,        new RespCommandsInfo("INCR",       RespCommand.INCR,        1, null)},
+                {RespCommand.INCRBY,      new RespCommandsInfo("INCRBY",     RespCommand.INCRBY,      2, null)},
+                {RespCommand.DECR,        new RespCommandsInfo("DECR",       RespCommand.DECR,        1, null)},
+                {RespCommand.DECRBY,      new RespCommandsInfo("DECRBY",     RespCommand.DECRBY,      2, null)},
+                {RespCommand.EXPIRE,      new RespCommandsInfo("EXPIRE",     RespCommand.EXPIRE,     -2, new HashSet<RespCommandOption>{
+                    RespCommandOption.NX,
+                    RespCommandOption.XX,
+                    RespCommandOption.GT,
+                    RespCommandOption.LT,
+                })},
+                {RespCommand.PEXPIRE,     new RespCommandsInfo("PEXPIRE",    RespCommand.PEXPIRE,    -2, new HashSet<RespCommandOption>{
+                    RespCommandOption.NX,
+                    RespCommandOption.XX,
+                    RespCommandOption.GT,
+                    RespCommandOption.LT,
+                })},
+                {RespCommand.PERSIST,     new RespCommandsInfo("PERSIST",    RespCommand.PERSIST,     1, null)},
+                {RespCommand.TTL,         new RespCommandsInfo("TTL",        RespCommand.TTL,         1, null)},
+                {RespCommand.PTTL,        new RespCommandsInfo("PTTL",       RespCommand.PTTL,        1, null)},
+                {RespCommand.SETBIT,      new RespCommandsInfo("SETBIT",     RespCommand.SETBIT,      3, null)},
+                {RespCommand.GETBIT,      new RespCommandsInfo("GETBIT",     RespCommand.GETBIT,      2, null)},
+                {RespCommand.BITCOUNT,    new RespCommandsInfo("BITCOUNT",   RespCommand.BITCOUNT,   -1, null)},
+                {RespCommand.BITPOS,      new RespCommandsInfo("BITPOS",     RespCommand.BITPOS,     -2, null)},
+                {RespCommand.BITFIELD,    new RespCommandsInfo("BITFIELD",   RespCommand.BITFIELD,   -1, null)},
+
+                {RespCommand.MSET,        new RespCommandsInfo("MSET",       RespCommand.MSET,       -2, null)},
+                {RespCommand.MSETNX,      new RespCommandsInfo("MSETNX",     RespCommand.MSETNX,     -2, null)},
+                {RespCommand.MGET,        new RespCommandsInfo("MGET",       RespCommand.MGET,       -2, null)},
+                {RespCommand.UNLINK,      new RespCommandsInfo("UNLINK",     RespCommand.UNLINK,     -1, null)},
+
+                {RespCommand.MULTI,       new RespCommandsInfo("MULTI",      RespCommand.MULTI,       0,  null)},
+                {RespCommand.EXEC,        new RespCommandsInfo("EXEC",       RespCommand.EXEC,        0,  null)},
+                {RespCommand.WATCH,       new RespCommandsInfo("WATCH",      RespCommand.WATCH,      -1, null)},
+                {RespCommand.UNWATCH,     new RespCommandsInfo("WATCH",      RespCommand.UNWATCH,     0, null)},
+                {RespCommand.DISCARD,     new RespCommandsInfo("DISCARD",    RespCommand.DISCARD,     0,  null)},
+                {RespCommand.GETDEL,      new RespCommandsInfo("GETDEL",     RespCommand.GETDEL,      1, null)},
+                {RespCommand.APPEND,      new RespCommandsInfo("APPEND",     RespCommand.APPEND,      2,  null)},
+
+                //Admin Commands
+                {RespCommand.ECHO,        new RespCommandsInfo("ECHO",       RespCommand.ECHO,        1, null)},
+                {RespCommand.REPLICAOF,   new RespCommandsInfo("REPLICAOF",  RespCommand.REPLICAOF,   2, null)},
+                {RespCommand.SECONDARYOF, new RespCommandsInfo("SLAVEOF",    RespCommand.SECONDARYOF, 2, null)},
+                { RespCommand.CONFIG, new RespCommandsInfo("CONFIG", RespCommand.CONFIG, 1, null, RespCommandFlags.None, 0, 0, 0, 
+                        RespAclCategories.Slow, configCommandsInfoMap.Values.ToArray()) },
+                {RespCommand.CLIENT,      new RespCommandsInfo("CLIENT",     RespCommand.CLIENT,      3, null)},
+                {RespCommand.REGISTERCS,  new RespCommandsInfo("REGISTERCS", RespCommand.REGISTERCS, -4, null)},
+            };
 
         private static readonly Dictionary<byte, RespCommandsInfo> sortedSetCommandsInfoMap = new Dictionary<byte, RespCommandsInfo>
         {
@@ -260,6 +284,48 @@ namespace Garnet.server
         {
             {RespCommand.COSCAN,    new RespCommandsInfo("COSCAN",   RespCommand.All,   -2, null, (byte)RespCommand.COSCAN) },
         };
+
+        private string GetRespFormatCommandInfo()
+        {
+            var sb = new StringBuilder();
+
+            sb.Append("*10\r\n");
+            // 1) Name
+            sb.Append($"${this.nameStr.Length}\r\n{this.nameStr}\r\n");
+            // 2) Arity
+            sb.Append($":{this.arity}\r\n");
+            // 3) Flags
+            sb.Append($"*{this.strFlags.Length}\r\n");
+            foreach (var flag in this.strFlags)
+                sb.Append($"+{flag}\r\n");
+            // 4) First key
+            sb.Append($":{this.firstKey}\r\n");
+            // 5) Last key
+            sb.Append($":{this.lastKey}\r\n");
+            // 6) Step
+            sb.Append($":{this.step}\r\n");
+            // 7) ACL categories
+            sb.Append($"*{this.strAclCats.Length}\r\n");
+            foreach (var aclCat in this.strAclCats)
+                sb.Append($"+@{aclCat}\r\n");
+            // 8) Tips (not currently supported)
+            sb.Append("*0\r\n");
+            // 9) Key specifications (not currently supported)
+            sb.Append("*0\r\n");
+            // 10) Subcommands
+            sb.Append($"*{this.subcommands.Length}\r\n");
+            foreach (var subcommand in subcommands)
+                sb.Append(subcommand.respFormatCommandInfo);
+
+            return sb.ToString();
+        }
+
+        public enum ConfigSubCommands : byte
+        {
+            GET,
+            REWRITE,
+            SET,
+        }
     }
 
     /// <summary>

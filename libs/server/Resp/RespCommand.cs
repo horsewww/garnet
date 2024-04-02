@@ -156,8 +156,8 @@ namespace Garnet.server
         Asking = 1 << 1,
         [Description("blocking")]
         Blocking = 1 << 2,
-        [Description("denyroom")]
-        DenyRoom = 1 << 3,
+        [Description("denyoom")]
+        DenyOom = 1 << 3,
         [Description("fast")]
         Fast = 1 << 4,
         [Description("loading")]
@@ -190,6 +190,57 @@ namespace Garnet.server
         Stale = 1 << 18,
         [Description("write")]
         Write = 1 << 19,
+    }
+
+    /// <summary>
+    /// RESP ACL categories
+    /// </summary>
+    [Flags]
+    enum RespAclCategories
+    {
+        None = 0,
+        [Description("admin")]
+        Admin = 1,
+        [Description("bitmap")]
+        Bitmap = 1 << 1,
+        [Description("blocking")]
+        Blocking = 1 << 2,
+        [Description("connection")]
+        Connection = 1 << 3,
+        [Description("dangerous")]
+        Dangerous = 1 << 4,
+        [Description("geo")]
+        Geo = 1 << 5,
+        [Description("hash")]
+        Hash = 1 << 6,
+        [Description("hyperloglog")]
+        HyperLogLog = 1 << 7,
+        [Description("fast")]
+        Fast = 1 << 8,
+        [Description("keyspace")]
+        KeySpace = 1 << 9,
+        [Description("list")]
+        List = 1 << 10,
+        [Description("pubsub")]
+        PubSub = 1 << 11,
+        [Description("read")]
+        Read = 1 << 12,
+        [Description("scripting")]
+        Scripting = 1 << 13,
+        [Description("set")]
+        Set = 1 << 14,
+        [Description("sortedset")]
+        SortedSet = 1 << 15,
+        [Description("slow")]
+        Slow = 1 << 16,
+        [Description("stream")]
+        Stream = 1 << 17,
+        [Description("string")]
+        String = 1 << 18,
+        [Description("transaction")]
+        Transaction = 1 << 19,
+        [Description("write")]
+        Write = 1 << 20,
     }
 
     /// <summary>
